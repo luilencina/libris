@@ -23,7 +23,7 @@ from app.core.config import (
 
 auth_router = APIRouter(prefix="/api/auth", tags=["authentication"])
 bearer_scheme = HTTPBearer(auto_error=False)
-OAUTH_STATE_COOKIE = "novel_translator_oauth_state"
+OAUTH_STATE_COOKIE = "libris_oauth_state"
 
 
 def _encode(value: bytes) -> str:

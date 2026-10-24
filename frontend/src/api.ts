@@ -15,7 +15,7 @@ export const API_BASE_URL = apiUrl.endsWith("/api")
   ? apiUrl
   : `${apiUrl}/api`;
 
-const AUTH_TOKEN_KEY = "novel-translator-session";
+const AUTH_TOKEN_KEY = "libris-session";
 
 export const initialAuthState = (() => {
   const params = new URLSearchParams(window.location.hash.slice(1));
