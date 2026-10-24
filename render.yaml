@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: novel-translator-api
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: APP_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: APP_SESSION_SECRET
+        generateValue: true
+      - key: GITHUB_ALLOWED_USERS
+        value: luilencina
+      - key: FRONTEND_URL
+        value: https://luilencina.github.io/libris
+      - key: GITHUB_CALLBACK_URL
+        value: https://novel-translator-api.onrender.com/api/auth/github/callback
+      - key: CORS_ORIGINS
+        value: https://luilencina.github.io
