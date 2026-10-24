@@ -101,9 +101,9 @@ O CORS permite a origem `https://luilencina.github.io`. CORS não substitui aute
 
 ### Interface no GitHub Pages
 
-1. Nas configurações do repositório GitHub, crie a variável de Actions `VITE_API_URL` com a origem HTTPS real da API Render, sem `/api` ao final. Essa URL não é um segredo.
-2. Em **Settings → Pages**, selecione **GitHub Actions** como fonte de publicação.
-3. Envie alterações para a branch `main` ou execute manualmente o workflow **Deploy frontend to GitHub Pages**.
+1. Em **Settings → Pages**, selecione **GitHub Actions** como fonte de publicação.
+2. O workflow publica automaticamente a cada envio para `main` ou pode ser executado manualmente pela aba **Actions**. Por padrão, ele usa `https://libris-api.onrender.com` como API.
+3. Se o Render atribuir outro domínio ao serviço, configure a variável de Actions `VITE_API_URL` com a origem HTTPS real do backend, sem `/api` ao final. Essa URL não é um segredo.
 
 O workflow instala as dependências, compila `frontend` e publica `frontend/dist`. O endereço esperado é `https://luilencina.github.io/libris/`.
 
