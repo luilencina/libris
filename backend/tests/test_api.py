@@ -14,7 +14,11 @@ class ApiTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def test_health_check_is_public(self) -> None:
-        response = self.client.get("/api/health")
+        with patch(
+            "app.services.translation_service._argos_translate_module",
+            side_effect=AssertionError("Argos must not be loaded by health."),
+        ):
+            response = self.client.get("/api/health")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
@@ -113,8 +117,7 @@ class ApiTests(unittest.TestCase):
                 FRONTEND_URL="https://example.github.io/app",
             ),
             patch("app.services.translation_service.GEMINI_API_KEY", ""),
-            patch("app.services.translation_service.get_argos_languages", return_value=[]),
-            patch("app.services.translation_service.get_argos_pairs", return_value=[]),
+            patch("app.services.translation_service.get_argos_catalog", return_value=([], [])),
             patch("app.services.translation_service.find_calibre_converter", return_value=None),
         ):
             token = auth._sign_payload(
@@ -128,6 +131,28 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(set(response.json()), {"gemini", "argos", "formats"})
+
+    def test_engine_status_survives_argos_package_discovery_failure(self) -> None:
+        with (
+            patch.object(auth, "APP_ENV", "development"),
+            patch.object(auth, "GITHUB_CLIENT_ID", ""),
+            patch(
+                "app.services.translation_service.get_argos_catalog",
+                side_effect=OSError("package directory is unavailable"),
+            ),
+            patch(
+                "app.services.translation_service.find_calibre_converter",
+                return_value=None,
+            ),
+        ):
+            response = self.client.get("/api/engines")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()["argos"]["available"])
+        self.assertEqual(
+            response.json()["argos"]["error"],
+            "Argos language packages could not be inspected.",
+        )
 
     def test_only_gemini_and_argos_are_supported(self) -> None:
         self.assertEqual(ALLOWED_ENGINES, {"gemini", "argos"})

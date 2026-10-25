@@ -1,14 +1,30 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.translations import public_router, router
 from app.core.auth import auth_router
 from app.core.config import CORS_ORIGINS
+from app.services.translation_service import _process_memory_mib
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    _LOGGER.info(
+        "Libris API is starting; Argos models will load on demand. memory=%s.",
+        _process_memory_mib(),
+    )
+    yield
 
 app = FastAPI(
     title="Libris API",
     description="Translate books with Gemini Cloud API or offline Argos Translate.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

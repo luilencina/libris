@@ -37,3 +37,7 @@ services:
         value: "1"
       - key: ARGOS_INTRA_THREADS
         value: "1"
+      - key: ARGOS_PEAK_RSS_ESTIMATE_MB
+        value: "465"
+      - key: ARGOS_MEMORY_SAFETY_MARGIN_MB
+        value: "32"

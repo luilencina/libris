@@ -1,26 +1,30 @@
 import asyncio
 import gc
+import importlib
 import json
 import logging
 import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Iterator
 
 from app.core.config import (
     BACKEND_DIR,
+    ARGOS_MEMORY_SAFETY_MARGIN_MB,
+    ARGOS_PEAK_RSS_ESTIMATE_MB,
     CHUNK_CHAR_LIMIT,
     GEMINI_API_KEY,
     GEMINI_MODEL,
     JOBS_DIR,
 )
-import argostranslate.package
-import argostranslate.translate
-
 from app.services.book_formats import (
     SUPPORTED_FORMATS,
     convert_epub_to_mobi,
@@ -34,8 +38,25 @@ from app.services.pdf_service import (
 
 _ACTIVE_JOB_IDS: set[str] = set()
 _RESOURCE_LOCK = asyncio.Lock()
+_ARGOS_METADATA_LOCK = threading.RLock()
 _LOGGER = logging.getLogger(__name__)
 _PRIORITY_LANGUAGE_CODES = frozenset({"pt", "en", "es", "de", "fr", "it"})
+
+
+@lru_cache(maxsize=1)
+def _argos_package_module() -> ModuleType:
+    package_module = importlib.import_module("argostranslate.package")
+    settings_module = importlib.import_module("argostranslate.settings")
+    _LOGGER.info(
+        "Argos runtime package directory: %s.",
+        settings_module.package_data_dir,
+    )
+    return package_module
+
+
+@lru_cache(maxsize=1)
+def _argos_translate_module() -> ModuleType:
+    return importlib.import_module("argostranslate.translate")
 
 
 def register_job(job_id: str) -> None:
@@ -132,79 +153,125 @@ def save_state(job_dir: Path, state: dict) -> None:
     write_json(job_dir / "state.json", state)
 
 
-def get_argos_languages() -> list[dict]:
+def _installed_argos_packages() -> list[Any]:
     return [
-        {"code": language.code, "name": language.name}
-        for language in argostranslate.translate.get_installed_languages()
+        package
+        for package in _argos_package_module().get_installed_packages()
+        if package.type == "translate"
     ]
 
 
-def get_argos_pairs() -> list[dict]:
-    languages = {
-        language.code: language
-        for language in argostranslate.translate.get_installed_languages()
-    }
+def _argos_languages_from_packages(packages: list[Any]) -> list[dict]:
+    languages: dict[str, str] = {}
+    for package in packages:
+        languages.setdefault(package.from_code, package.from_name)
+        languages.setdefault(package.to_code, package.to_name)
+    return [
+        {"code": code, "name": name}
+        for code, name in sorted(
+            languages.items(),
+            key=lambda item: (item[1].casefold(), item[0]),
+        )
+    ]
+
+
+def _argos_pairs_from_packages(packages: list[Any]) -> list[dict]:
+    names: dict[str, str] = {}
+    edges: dict[str, set[str]] = {}
+    for package in packages:
+        names.setdefault(package.from_code, package.from_name)
+        names.setdefault(package.to_code, package.to_name)
+        edges.setdefault(package.from_code, set()).add(package.to_code)
+
     pairs = []
-    for source in languages.values():
-        for translation in source.translations_from:
-            target = languages.get(translation.to_lang.code)
-            if target and source.code != target.code:
-                pairs.append(
-                    {
-                        "from_code": source.code,
-                        "from_name": source.name,
-                        "to_code": target.code,
-                        "to_name": target.name,
-                    }
-                )
+    for source_code in names:
+        reachable: set[str] = set()
+        frontier = list(edges.get(source_code, set()))
+        while frontier:
+            target_code = frontier.pop()
+            if target_code == source_code or target_code in reachable:
+                continue
+            reachable.add(target_code)
+            frontier.extend(edges.get(target_code, set()))
+        for target_code in reachable:
+            pairs.append(
+                {
+                    "from_code": source_code,
+                    "from_name": names[source_code],
+                    "to_code": target_code,
+                    "to_name": names[target_code],
+                }
+            )
     return sorted(
         pairs,
-        key=lambda pair: (pair["from_name"].casefold(), pair["to_name"].casefold()),
+        key=lambda pair: (
+            pair["from_name"].casefold(),
+            pair["to_name"].casefold(),
+        ),
     )
 
 
+def get_argos_languages() -> list[dict]:
+    with _ARGOS_METADATA_LOCK:
+        return _argos_languages_from_packages(_installed_argos_packages())
+
+
+def get_argos_pairs() -> list[dict]:
+    with _ARGOS_METADATA_LOCK:
+        return _argos_pairs_from_packages(_installed_argos_packages())
+
+
+def get_argos_catalog() -> tuple[list[dict], list[dict]]:
+    with _ARGOS_METADATA_LOCK:
+        packages = _installed_argos_packages()
+        return _argos_languages_from_packages(packages), _argos_pairs_from_packages(packages)
+
+
 def get_argos_translation_steps(source_code: str, target_code: str) -> list[Any]:
-    languages = {
-        identifier: language
-        for language in argostranslate.translate.get_installed_languages()
-        for identifier in (language.code.casefold(), language.name.casefold())
-    }
-    source = languages.get(source_code.strip().casefold())
-    target = languages.get(target_code.strip().casefold())
-    if source is None or target is None:
-        raise RuntimeError(
-            f"Argos language packages are missing for {source_code} -> {target_code}."
-        )
+    with _ARGOS_METADATA_LOCK:
+        translate_module = _argos_translate_module()
+        languages = {
+            identifier: language
+            for language in translate_module.get_installed_languages()
+            for identifier in (language.code.casefold(), language.name.casefold())
+        }
+        source = languages.get(source_code.strip().casefold())
+        target = languages.get(target_code.strip().casefold())
+        if source is None or target is None:
+            raise RuntimeError(
+                f"Argos language packages are missing for {source_code} -> {target_code}."
+            )
 
-    translation = source.get_translation(target)
-    if translation is None:
-        raise RuntimeError(
-            f"No Argos translation route is installed for "
-            f"{source.code} -> {target.code}."
-        )
+        translation = source.get_translation(target)
+        if translation is None:
+            raise RuntimeError(
+                f"No Argos translation route is installed for "
+                f"{source.code} -> {target.code}."
+            )
 
-    def flatten(item: Any) -> list[Any]:
-        if isinstance(item, argostranslate.translate.CompositeTranslation):
-            return flatten(item.t1) + flatten(item.t2)
-        return [item]
+        def flatten(item: Any) -> list[Any]:
+            if isinstance(item, translate_module.CompositeTranslation):
+                return flatten(item.t1) + flatten(item.t2)
+            return [item]
 
-    return flatten(translation)
+        return flatten(translation)
 
 
 def release_argos_translation(translation: Any) -> None:
     visited: set[int] = set()
+    translate_module = _argos_translate_module()
 
     def release(item: Any) -> None:
         if id(item) in visited:
             return
         visited.add(id(item))
-        if isinstance(item, argostranslate.translate.CachedTranslation):
+        if isinstance(item, translate_module.CachedTranslation):
             item.cache.clear()
             release(item.underlying)
-        elif isinstance(item, argostranslate.translate.CompositeTranslation):
+        elif isinstance(item, translate_module.CompositeTranslation):
             release(item.t1)
             release(item.t2)
-        elif isinstance(item, argostranslate.translate.PackageTranslation):
+        elif isinstance(item, translate_module.PackageTranslation):
             item.translator = None
             if getattr(item.sentencizer, "detector", None) is not None:
                 item.sentencizer.detector = None
@@ -216,7 +283,13 @@ def release_argos_translation(translation: Any) -> None:
 
 
 def _process_memory_mib() -> dict[str, float | None]:
-    values: dict[str, float | None] = {"rss_mib": None, "peak_rss_mib": None}
+    values: dict[str, float | None] = {
+        "rss_mib": None,
+        "peak_rss_mib": None,
+        "container_used_mib": None,
+        "container_limit_mib": None,
+        "container_available_mib": None,
+    }
     try:
         with Path("/proc/self/status").open(encoding="utf-8") as status_file:
             for line in status_file:
@@ -225,24 +298,86 @@ def _process_memory_mib() -> dict[str, float | None]:
                     values[key] = round(int(line.split()[1]) / 1024, 1)
     except OSError:
         pass
+
+    cgroup_paths = (
+        (
+            Path("/sys/fs/cgroup/memory.current"),
+            Path("/sys/fs/cgroup/memory.max"),
+        ),
+        (
+            Path("/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+        ),
+    )
+    for current_path, limit_path in cgroup_paths:
+        try:
+            current_text = current_path.read_text(encoding="ascii").strip()
+            limit_text = limit_path.read_text(encoding="ascii").strip()
+            if limit_text == "max":
+                continue
+            current = int(current_text)
+            limit = int(limit_text)
+            if limit <= 0 or limit >= 2**60:
+                continue
+            values["container_used_mib"] = round(current / (1024 * 1024), 1)
+            values["container_limit_mib"] = round(limit / (1024 * 1024), 1)
+            values["container_available_mib"] = round(
+                max(0, limit - current) / (1024 * 1024),
+                1,
+            )
+            break
+        except (OSError, ValueError):
+            continue
     return values
 
 
+def _check_argos_memory_headroom() -> dict[str, float | None]:
+    memory = _process_memory_mib()
+    available = memory["container_available_mib"]
+    if available is None:
+        _LOGGER.warning(
+            "Argos memory preflight unavailable; no cgroup memory limit was detected."
+        )
+        return memory
+    current_rss = memory["rss_mib"]
+    estimated_increase = (
+        ARGOS_PEAK_RSS_ESTIMATE_MB
+        if current_rss is None
+        else max(0.0, ARGOS_PEAK_RSS_ESTIMATE_MB - current_rss)
+    )
+    required_free = estimated_increase + ARGOS_MEMORY_SAFETY_MARGIN_MB
+    _LOGGER.info(
+        "Argos memory preflight: container used=%s MiB, limit=%s MiB, "
+        "available=%s MiB, process_rss=%s MiB, estimated_peak_rss=%d MiB, "
+        "safety_margin=%d MiB, required_free=%.1f MiB.",
+        memory["container_used_mib"],
+        memory["container_limit_mib"],
+        available,
+        current_rss,
+        ARGOS_PEAK_RSS_ESTIMATE_MB,
+        ARGOS_MEMORY_SAFETY_MARGIN_MB,
+        required_free,
+    )
+    if available < required_free:
+        raise RuntimeError(
+            "Argos translation was not started because the container has "
+            f"{available:.1f} MiB free; approximately {required_free:.1f} MiB "
+            "is required for the estimated model peak and safety margin."
+        )
+    return memory
+
+
 def _argos_diagnostics(run_test: bool) -> dict:
-    installed_packages = [
-        package
-        for package in argostranslate.package.get_installed_packages()
-        if package.type == "translate"
-    ]
+    installed_packages = _installed_argos_packages()
     direct_pairs = sorted(
         {
             (package.from_code, package.to_code)
             for package in installed_packages
         }
     )
-    languages = get_argos_languages()
+    languages = _argos_languages_from_packages(installed_packages)
     language_codes = {language["code"] for language in languages}
-    usable_pairs = get_argos_pairs()
+    usable_pairs = _argos_pairs_from_packages(installed_packages)
     usable_pair_codes = {
         (pair["from_code"], pair["to_code"])
         for pair in usable_pairs
@@ -290,14 +425,16 @@ def _argos_diagnostics(run_test: bool) -> dict:
                 "detail": "No installed Argos package can be tested.",
             }
         else:
+            _check_argos_memory_headroom()
+            translate_module = _argos_translate_module()
             source = next(
                 language
-                for language in argostranslate.translate.get_installed_languages()
+                for language in translate_module.get_installed_languages()
                 if language.code == pair[0]
             )
             target = next(
                 language
-                for language in argostranslate.translate.get_installed_languages()
+                for language in translate_module.get_installed_languages()
                 if language.code == pair[1]
             )
             translation = source.get_translation(target)
@@ -306,6 +443,7 @@ def _argos_diagnostics(run_test: bool) -> dict:
                     raise RuntimeError(
                         f"No installed Argos route for {pair[0]} -> {pair[1]}."
                     )
+                _check_argos_memory_headroom()
                 translated = translation.translate("Good morning.")
                 result["test_translation"] = {
                     "status": "ok",
@@ -336,12 +474,13 @@ async def get_argos_diagnostics(run_test: bool = False) -> dict:
 
 
 def get_available_argos_packages() -> list[dict]:
-    argostranslate.package.update_package_index()
+    package_module = _argos_package_module()
+    package_module.update_package_index()
     installed_pairs = {
         (pair["from_code"], pair["to_code"]) for pair in get_argos_pairs()
     }
     packages = []
-    for package in argostranslate.package.get_available_packages():
+    for package in package_module.get_available_packages():
         if (package.from_code, package.to_code) not in installed_pairs:
             packages.append(
                 {"from_code": package.from_code, "to_code": package.to_code}
@@ -357,28 +496,34 @@ async def get_available_argos_packages_safely() -> list[dict]:
 def install_argos_package(source_code: str, target_code: str) -> None:
     source_code = source_code.strip().casefold()
     target_code = target_code.strip().casefold()
-    installed_pairs = {
-        (package.from_code, package.to_code)
-        for package in argostranslate.package.get_installed_packages()
-        if package.type == "translate"
-    }
-    if (source_code, target_code) in installed_pairs:
-        return
+    with _ARGOS_METADATA_LOCK:
+        package_module = _argos_package_module()
+        installed_pairs = {
+            (package.from_code, package.to_code)
+            for package in package_module.get_installed_packages()
+            if package.type == "translate"
+        }
+        if (source_code, target_code) in installed_pairs:
+            return
 
-    argostranslate.package.update_package_index()
-    package = next(
-        (
-            item
-            for item in argostranslate.package.get_available_packages()
-            if item.from_code == source_code and item.to_code == target_code
-        ),
-        None,
-    )
-    if package is None:
-        raise ValueError(
-            f"No Argos language package is available for {source_code} -> {target_code}."
+        package_module.update_package_index()
+        package = next(
+            (
+                item
+                for item in package_module.get_available_packages()
+                if item.from_code == source_code and item.to_code == target_code
+            ),
+            None,
         )
-    package.install()
+        if package is None:
+            raise ValueError(
+                f"No Argos language package is available for "
+                f"{source_code} -> {target_code}."
+            )
+        package.install()
+        translate_module = sys.modules.get("argostranslate.translate")
+        if translate_module is not None:
+            translate_module.get_installed_languages.cache_clear()
 
 
 async def install_argos_package_safely(source_code: str, target_code: str) -> None:
@@ -432,6 +577,7 @@ async def translate_with_argos(
     target_language: str,
 ) -> str:
     async with _RESOURCE_LOCK:
+        _check_argos_memory_headroom()
         steps = await asyncio.to_thread(
             get_argos_translation_steps,
             source_language,
@@ -440,6 +586,7 @@ async def translate_with_argos(
         result = text
         try:
             for step in steps:
+                _check_argos_memory_headroom()
                 result = await asyncio.to_thread(_translate_argos_step, step, result)
                 await asyncio.to_thread(release_argos_translation, step)
         finally:
@@ -508,6 +655,14 @@ def create_job(
         (job_dir / "translations").mkdir()
         saved_upload = job_dir / f"source.{input_format}"
         _save_uploaded_file(upload_path, saved_upload)
+        extraction_started_at = time.monotonic()
+        _LOGGER.info(
+            "Book extraction started: job_id=%s format=%s bytes=%d memory=%s.",
+            job_id,
+            input_format,
+            saved_upload.stat().st_size,
+            _process_memory_mib(),
+        )
         result = subprocess.run(
             [
                 sys.executable,
@@ -532,6 +687,15 @@ def create_job(
         page_count = int(extraction["total_pages_with_text"])
         chunk_count = int(extraction["total_chunks"])
         (job_dir / "extraction.json").unlink()
+        _LOGGER.info(
+            "Book extraction completed: job_id=%s pages=%d chunks=%d "
+            "elapsed_seconds=%.1f memory=%s.",
+            job_id,
+            page_count,
+            chunk_count,
+            time.monotonic() - extraction_started_at,
+            _process_memory_mib(),
+        )
     except Exception:
         remove_job_directory(job_dir)
         raise
@@ -584,6 +748,15 @@ async def _run_job(job_id: str) -> None:
     if not state:
         return
 
+    started_at = time.monotonic()
+    _LOGGER.info(
+        "Translation job started: job_id=%s engine=%s chunks=%s memory=%s.",
+        job_id,
+        state.get("engine"),
+        state.get("total_chunks"),
+        _process_memory_mib(),
+    )
+
     if state.get("cancel_requested"):
         state["status"] = "cancelled"
         save_state(job_dir, state)
@@ -595,6 +768,7 @@ async def _run_job(job_id: str) -> None:
 
     translations_dir = job_dir / "translations"
     total_chunks = max(int(state.get("total_chunks", 0)), 1)
+    phase = "translating"
 
     try:
         if state["engine"] == "argos":
@@ -625,6 +799,14 @@ async def _run_job(job_id: str) -> None:
         output_path = job_dir / f"translated.{output_format}"
         translated_chunks = iter_translated_chunks(job_dir)
         paragraph_styles = iter_chunk_styles(job_dir)
+        phase = "exporting"
+        export_started_at = time.monotonic()
+        _LOGGER.info(
+            "Book export started: job_id=%s format=%s memory=%s.",
+            job_id,
+            output_format,
+            _process_memory_mib(),
+        )
         if output_format == "pdf":
             await asyncio.to_thread(
                 create_translated_pdf,
@@ -648,6 +830,14 @@ async def _run_job(job_id: str) -> None:
             )
             if output_format == "mobi":
                 await asyncio.to_thread(convert_epub_to_mobi, epub_path, output_path)
+        _LOGGER.info(
+            "Book export completed: job_id=%s format=%s elapsed_seconds=%.1f "
+            "memory=%s.",
+            job_id,
+            output_format,
+            time.monotonic() - export_started_at,
+            _process_memory_mib(),
+        )
 
         state = read_json(job_dir / "state.json", state)
         if state.get("cancel_requested"):
@@ -663,6 +853,14 @@ async def _run_job(job_id: str) -> None:
         )
         state["error"] = None
         save_state(job_dir, state)
+        _LOGGER.info(
+            "Translation job completed: job_id=%s engine=%s elapsed_seconds=%.1f "
+            "memory=%s.",
+            job_id,
+            state.get("engine"),
+            time.monotonic() - started_at,
+            _process_memory_mib(),
+        )
 
     except Exception as error:
         state = read_json(job_dir / "state.json", state)
@@ -671,6 +869,16 @@ async def _run_job(job_id: str) -> None:
         state["completed_chunks"] = sum(1 for _ in translations_dir.glob("*.txt"))
         state["progress"] = round(state["completed_chunks"] / total_chunks * 100)
         save_state(job_dir, state)
+        _LOGGER.error(
+            "Translation job failed: job_id=%s engine=%s phase=%s error_type=%s "
+            "elapsed_seconds=%.1f memory=%s.",
+            job_id,
+            state.get("engine"),
+            phase,
+            type(error).__name__,
+            time.monotonic() - started_at,
+            _process_memory_mib(),
+        )
 
 
 async def _run_gemini_chunks(
@@ -730,6 +938,22 @@ async def _run_argos_stages(
     translations_dir: Path,
     total_chunks: int,
 ) -> bool:
+    has_unfinished_chunks = False
+    for chunk in iter_job_chunks(job_dir):
+        output_path = translations_dir / f"{chunk['index']:06d}.txt"
+        if not output_path.is_file() or not output_path.stat().st_size:
+            has_unfinished_chunks = True
+            break
+    if not has_unfinished_chunks:
+        for intermediate_dir in job_dir.glob("argos-stage-*"):
+            if intermediate_dir.is_dir():
+                shutil.rmtree(intermediate_dir)
+        state["completed_chunks"] = total_chunks
+        state["progress"] = 100
+        save_state(job_dir, state)
+        return True
+
+    _check_argos_memory_headroom()
     stages = await asyncio.to_thread(
         get_argos_translation_steps,
         state["source_language"],
@@ -746,12 +970,15 @@ async def _run_argos_stages(
         output_dir.mkdir(exist_ok=True)
         input_dir = None if stage_index == 0 else intermediate_dirs[stage_index - 1]
         stage_completed = 0
+        stage_started_at = time.monotonic()
+        first_translation = True
         _LOGGER.info(
-            "Starting Argos model stage %d/%d: %s -> %s.",
+            "Starting Argos model stage %d/%d: %s -> %s memory=%s.",
             stage_index + 1,
             len(stages),
             stage.from_lang.code,
             stage.to_lang.code,
+            _process_memory_mib(),
         )
 
         try:
@@ -782,6 +1009,16 @@ async def _run_argos_stages(
                     if input_dir is None
                     else (input_dir / output_path.name).read_text(encoding="utf-8")
                 )
+                if first_translation:
+                    _check_argos_memory_headroom()
+                    _LOGGER.info(
+                        "Loading Argos model stage %d/%d: %s -> %s.",
+                        stage_index + 1,
+                        len(stages),
+                        stage.from_lang.code,
+                        stage.to_lang.code,
+                    )
+                    translation_started_at = time.monotonic()
                 last_error = None
                 for attempt in range(3):
                     state = read_json(job_dir / "state.json", state)
@@ -795,6 +1032,15 @@ async def _run_argos_stages(
                             stage,
                             input_text,
                         )
+                        if first_translation:
+                            _LOGGER.info(
+                                "Argos model stage %d first translation finished "
+                                "in %.1f seconds; memory=%s.",
+                                stage_index + 1,
+                                time.monotonic() - translation_started_at,
+                                _process_memory_mib(),
+                            )
+                            first_translation = False
                         output_path.write_text(translated, encoding="utf-8")
                         last_error = None
                         break
@@ -821,20 +1067,23 @@ async def _run_argos_stages(
                     * 100
                 )
                 save_state(job_dir, state)
-        except Exception:
-            _LOGGER.exception(
-                "Argos model stage %d failed: %s -> %s.",
+        except Exception as error:
+            _LOGGER.error(
+                "Argos model stage %d failed: %s -> %s error_type=%s.",
                 stage_index + 1,
                 stage.from_lang.code,
                 stage.to_lang.code,
+                type(error).__name__,
             )
             raise
         finally:
             await asyncio.to_thread(release_argos_translation, stage)
             _LOGGER.info(
-                "Released Argos model stage %d/%d.",
+                "Released Argos model stage %d/%d in %.1f seconds; memory=%s.",
                 stage_index + 1,
                 len(stages),
+                time.monotonic() - stage_started_at,
+                _process_memory_mib(),
             )
 
     for intermediate_dir in intermediate_dirs:
@@ -864,8 +1113,17 @@ async def run_job(job_id: str) -> None:
 async def get_engine_status() -> dict:
     gemini_ready = bool(GEMINI_API_KEY)
 
-    argos_languages = get_argos_languages()
-    argos_pairs = get_argos_pairs()
+    argos_error = None
+    try:
+        argos_languages, argos_pairs = await asyncio.to_thread(get_argos_catalog)
+    except Exception as error:
+        _LOGGER.error(
+            "Could not inspect Argos packages (error_type=%s).",
+            type(error).__name__,
+        )
+        argos_languages = []
+        argos_pairs = []
+        argos_error = "Argos language packages could not be inspected."
     calibre_available = find_calibre_converter() is not None
 
     return {
@@ -878,6 +1136,7 @@ async def get_engine_status() -> dict:
             "available": bool(argos_pairs),
             "languages": argos_languages,
             "pairs": argos_pairs,
+            "error": argos_error,
             "limits_note": (
                 "Runs locally using installed Argos Translate language packages."
             ),

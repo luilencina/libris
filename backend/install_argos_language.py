@@ -28,6 +28,10 @@ logger = logging.getLogger("libris.argos")
 
 def main() -> None:
     logger.info("Starting sequential Argos language package installation.")
+    logger.info(
+        "Argos build package directory: %s.",
+        argostranslate.settings.package_data_dir,
+    )
     try:
         installed = {
             (package.from_code, package.to_code)

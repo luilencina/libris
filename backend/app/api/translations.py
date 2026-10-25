@@ -15,8 +15,7 @@ from app.services.translation_service import (
     create_job_safely,
     delete_job,
     get_argos_diagnostics,
-    get_argos_languages,
-    get_argos_pairs,
+    get_argos_catalog,
     get_available_argos_packages_safely,
     get_job_dir,
     install_argos_package_safely,
@@ -55,7 +54,20 @@ async def engines():
 
 @router.get("/languages")
 async def languages():
-    return {"languages": get_argos_languages(), "pairs": get_argos_pairs()}
+    try:
+        installed_languages, installed_pairs = await asyncio.to_thread(
+            get_argos_catalog
+        )
+    except Exception as error:
+        _LOGGER.error(
+            "Could not inspect Argos packages (error_type=%s).",
+            type(error).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Argos language packages are unavailable.",
+        ) from error
+    return {"languages": installed_languages, "pairs": installed_pairs}
 
 
 @router.get("/languages/diagnostics")
@@ -128,7 +140,19 @@ async def start_translation(
         )
 
     if engine == "argos":
-        installed_languages = get_argos_languages()
+        try:
+            installed_languages, installed_pairs = await asyncio.to_thread(
+                get_argos_catalog
+            )
+        except Exception as error:
+            _LOGGER.error(
+                "Could not inspect Argos packages (error_type=%s).",
+                type(error).__name__,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Argos language packages are unavailable.",
+            ) from error
         source = next(
             (item for item in installed_languages if item["name"].casefold() == source_language.casefold() or item["code"].casefold() == source_language.casefold()),
             None,
@@ -139,7 +163,7 @@ async def start_translation(
         )
         if not source or not target or not any(
             pair["from_code"] == source["code"] and pair["to_code"] == target["code"]
-            for pair in get_argos_pairs()
+            for pair in installed_pairs
         ):
             raise HTTPException(
                 status_code=400,

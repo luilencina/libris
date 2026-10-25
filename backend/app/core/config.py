@@ -22,6 +22,14 @@ GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "100"))
 CHUNK_CHAR_LIMIT = max(1500, int(os.getenv("CHUNK_CHAR_LIMIT", "6500")))
+ARGOS_PEAK_RSS_ESTIMATE_MB = max(
+    1,
+    int(os.getenv("ARGOS_PEAK_RSS_ESTIMATE_MB", "465")),
+)
+ARGOS_MEMORY_SAFETY_MARGIN_MB = max(
+    0,
+    int(os.getenv("ARGOS_MEMORY_SAFETY_MARGIN_MB", "32")),
+)
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ORIGINS", "http://127.0.0.1:5173").split(",")

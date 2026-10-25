@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
@@ -5,6 +6,9 @@ from unittest.mock import patch
 from zipfile import ZIP_STORED, ZipFile
 from xml.etree import ElementTree
 
+import fitz
+
+from app.services.book_extractor import extract_job_chunks
 from app.services.book_formats import (
     _convert_with_calibre,
     _resolve_epub_path,
@@ -52,6 +56,47 @@ class BookFormatTests(unittest.TestCase):
         self.assertTrue(heading["uppercase"])
         self.assertTrue(paragraph["bold"])
         self.assertTrue(paragraph["italic"])
+
+    def test_incrementally_extracts_pdf_and_epub_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = {}
+            pdf_path = root / "source.pdf"
+            document = fitz.open()
+            page = document.new_page()
+            page.insert_text((72, 72), "PDF extraction content.")
+            document.save(pdf_path)
+            document.close()
+            sources["pdf"] = pdf_path
+
+            epub_path = root / "source.epub"
+            self._create_epub(epub_path)
+            sources["epub"] = epub_path
+
+            for file_format, source_path in sources.items():
+                with self.subTest(file_format=file_format):
+                    job_dir = root / f"job-{file_format}"
+                    job_dir.mkdir()
+                    page_count, chunk_count = extract_job_chunks(
+                        source_path,
+                        file_format,
+                        job_dir,
+                        chunk_limit=1500,
+                    )
+                    chunks = [
+                        json.loads(line)
+                        for line in (job_dir / "chunks.jsonl").read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                    ]
+                    chunk_text = " ".join(chunk["text"] for chunk in chunks)
+
+                    self.assertGreater(page_count, 0)
+                    self.assertEqual(chunk_count, 1)
+                    if file_format == "pdf":
+                        self.assertIn("PDF extraction content.", chunk_text)
+                    else:
+                        self.assertIn("Bold italic and regular.", chunk_text)
 
     def test_generates_epub_with_requested_styles_and_uncompressed_mimetype(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
