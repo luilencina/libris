@@ -471,6 +471,17 @@ async def translate_chunk(job: dict, text: str) -> str:
 
     raise ValueError(f"Unsupported translation engine: {job['engine']}")
 
+
+def _save_uploaded_file(upload_path: Path, saved_upload: Path) -> None:
+    temporary_upload = saved_upload.with_name(f".{saved_upload.name}.tmp")
+    try:
+        shutil.copy2(upload_path, temporary_upload)
+        temporary_upload.replace(saved_upload)
+        upload_path.unlink()
+    finally:
+        temporary_upload.unlink(missing_ok=True)
+
+
 def create_job(
     upload_path: Path,
     original_filename: str,
@@ -496,7 +507,7 @@ def create_job(
     try:
         (job_dir / "translations").mkdir()
         saved_upload = job_dir / f"source.{input_format}"
-        upload_path.replace(saved_upload)
+        _save_uploaded_file(upload_path, saved_upload)
         result = subprocess.run(
             [
                 sys.executable,

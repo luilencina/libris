@@ -1,4 +1,6 @@
 import asyncio
+import errno
+import logging
 import tempfile
 from pathlib import Path
 
@@ -32,6 +34,7 @@ router = APIRouter(
 )
 public_router = APIRouter(prefix="/api", tags=["health"])
 ALLOWED_ENGINES = {"gemini", "argos"}
+_LOGGER = logging.getLogger(__name__)
 
 
 class ArgosPackageRequest(BaseModel):
@@ -176,6 +179,16 @@ async def start_translation(
     except ValueError as error:
         temporary_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        temporary_path.unlink(missing_ok=True)
+        _LOGGER.exception("Could not save or read uploaded book %s.", filename)
+        status_code = 507 if error.errno == errno.ENOSPC else 500
+        detail = (
+            "The server does not have enough storage to process this book."
+            if status_code == 507
+            else "The server could not save or read the uploaded book."
+        )
+        raise HTTPException(status_code=status_code, detail=detail) from error
     except Exception as error:
         temporary_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=f"Could not read the book: {error}") from error
