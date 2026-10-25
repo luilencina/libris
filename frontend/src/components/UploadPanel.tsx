@@ -1,6 +1,5 @@
 import { ChangeEvent, DragEvent, useRef, useState } from "react";
 import {
-  ChevronDown,
   FileText,
   FolderOpen,
   Languages,
@@ -16,6 +15,7 @@ import {
 import { uiText } from "../schemas/ui";
 import type { BookFormat, Engine, EngineStatus } from "../types/translation";
 import { LanguagePackageManager } from "./LanguagePackageManager";
+import { SelectField } from "./SelectField";
 
 interface UploadPanelProps {
   selectedFile: File | null;
@@ -186,77 +186,43 @@ export function UploadPanel({
       </div>
 
       <div className="field-row">
-        <label className="field">
-          <span>{uiText.upload.sourceLanguage}</span>
-          <div className="select-wrap group">
-            <Languages className="shrink-0" size={17} />
-            <select
-              className="w-full min-w-0 cursor-pointer appearance-none border-0 bg-transparent py-3 text-sm text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              value={sourceLanguage}
-              onChange={(event) =>
-                handleSourceLanguageChange(event.target.value)
-              }
-              disabled={!sourceLanguages.length}
-              aria-label={uiText.upload.sourceLanguage}
-            >
-              {sourceLanguages.map((language) => (
-                <option key={language.code} value={language.name}>
-                  {language.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="shrink-0 text-slate-400 transition-transform group-focus-within:rotate-180" size={16} />
-          </div>
-        </label>
-        <label className="field">
-          <span>{uiText.upload.targetLanguage}</span>
-          <div className="select-wrap group">
-            <Languages className="shrink-0" size={17} />
-            <select
-              className="w-full min-w-0 cursor-pointer appearance-none border-0 bg-transparent py-3 text-sm text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              value={targetLanguage}
-              onChange={(event) => onTargetLanguageChange(event.target.value)}
-              disabled={!targetLanguages.length}
-              aria-label={uiText.upload.targetLanguage}
-            >
-              {targetLanguages.map((language) => (
-                <option key={language.code} value={language.name}>
-                  {language.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="shrink-0 text-slate-400 transition-transform group-focus-within:rotate-180" size={16} />
-          </div>
-        </label>
-        <label className="field">
-          <span>{uiText.upload.exportFormat}</span>
-          <div className="select-wrap group">
-            <FileText className="shrink-0" size={17} />
-            <select
-              className="w-full min-w-0 cursor-pointer appearance-none border-0 bg-transparent py-3 text-sm text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              value={outputFormat}
-              onChange={(event) =>
-                onOutputFormatChange(event.target.value as BookFormat)
-              }
-              aria-label={uiText.upload.exportFormat}
-            >
-              {bookFormats.map((format) => (
-                <option
-                  key={format}
-                  value={format}
-                  disabled={!engineStatus?.formats.output.includes(format)}
-                >
-                  {bookFormatLabels[format]}
-                  {format === "mobi" &&
-                  !engineStatus?.formats.mobi_available
-                    ? ` ${uiText.upload.mobiFormatHint}`
-                    : ""}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="shrink-0 text-slate-400 transition-transform group-focus-within:rotate-180" size={16} />
-          </div>
-        </label>
+        <SelectField
+          label={uiText.upload.sourceLanguage}
+          value={sourceLanguage}
+          options={sourceLanguages.map(({ name }) => ({
+            value: name,
+            label: name,
+          }))}
+          icon={<Languages size={18} />}
+          onChange={handleSourceLanguageChange}
+          disabled={!sourceLanguages.length}
+        />
+        <SelectField
+          label={uiText.upload.targetLanguage}
+          value={targetLanguage}
+          options={targetLanguages.map(({ name }) => ({
+            value: name,
+            label: name,
+          }))}
+          icon={<Languages size={18} />}
+          onChange={onTargetLanguageChange}
+          disabled={!targetLanguages.length}
+        />
+        <SelectField
+          label={uiText.upload.exportFormat}
+          value={outputFormat}
+          options={bookFormats.map((format) => ({
+            value: format,
+            label: `${bookFormatLabels[format]}${
+              format === "mobi" && !engineStatus?.formats.mobi_available
+                ? ` ${uiText.upload.mobiFormatHint}`
+                : ""
+            }`,
+            disabled: !engineStatus?.formats.output.includes(format),
+          }))}
+          icon={<FileText size={18} />}
+          onChange={onOutputFormatChange}
+        />
       </div>
       {engine === "argos" && (
         <LanguagePackageManager
