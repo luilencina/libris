@@ -15,7 +15,6 @@ class AuthenticationTests(unittest.TestCase):
             GITHUB_CLIENT_SECRET="client-secret",
             GITHUB_CALLBACK_URL="https://api.example.com/api/auth/github/callback",
             FRONTEND_URL="https://example.github.io/app",
-            GITHUB_ALLOWED_USERS="luilencina",
         ):
             token = auth._sign_payload(
                 {"typ": "session", "sub": "luilencina"},
@@ -32,7 +31,6 @@ class AuthenticationTests(unittest.TestCase):
             GITHUB_CLIENT_SECRET="client-secret",
             GITHUB_CALLBACK_URL="https://api.example.com/api/auth/github/callback",
             FRONTEND_URL="https://example.github.io/app",
-            GITHUB_ALLOWED_USERS="luilencina",
         ):
             token = auth._sign_payload(
                 {"typ": "session", "sub": "luilencina"},

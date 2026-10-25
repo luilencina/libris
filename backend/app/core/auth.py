@@ -15,7 +15,6 @@ from app.core.config import (
     APP_ENV,
     APP_SESSION_SECRET,
     FRONTEND_URL,
-    GITHUB_ALLOWED_USERS,
     GITHUB_CALLBACK_URL,
     GITHUB_CLIENT_ID,
     GITHUB_CLIENT_SECRET,
@@ -41,7 +40,6 @@ def _require_auth_configuration() -> None:
         "GITHUB_CALLBACK_URL": GITHUB_CALLBACK_URL,
         "FRONTEND_URL": FRONTEND_URL,
         "APP_SESSION_SECRET": APP_SESSION_SECRET,
-        "GITHUB_ALLOWED_USERS": GITHUB_ALLOWED_USERS,
     }
     missing = [name for name, value in required.items() if not value]
     if missing:
@@ -93,14 +91,6 @@ def _verify_token(token: str, expected_type: str) -> dict:
         return payload
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
         raise ValueError("Invalid or expired token.") from error
-
-
-def _allowed_users() -> set[str]:
-    return {
-        username.strip().casefold()
-        for username in GITHUB_ALLOWED_USERS.split(",")
-        if username.strip()
-    }
 
 
 def _frontend_redirect(fragment: str) -> RedirectResponse:
@@ -222,8 +212,11 @@ async def github_callback(
             detail="Could not complete GitHub authentication.",
         ) from request_error
 
-    if not isinstance(username, str) or username.casefold() not in _allowed_users():
-        return _frontend_redirect("auth_error=not_allowed")
+    if not isinstance(username, str) or not username.strip():
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub did not return a valid username.",
+        )
 
     session_token = _sign_payload(
         {"typ": "session", "sub": username},
@@ -246,6 +239,6 @@ def require_authenticated_user(
         raise HTTPException(status_code=401, detail=str(error)) from error
 
     username = payload.get("sub")
-    if not isinstance(username, str) or username.casefold() not in _allowed_users():
-        raise HTTPException(status_code=403, detail="This GitHub account is not authorized.")
+    if not isinstance(username, str) or not username.strip():
+        raise HTTPException(status_code=401, detail="Invalid GitHub session.")
     return {"login": username}

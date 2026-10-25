@@ -15,7 +15,6 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
 GITHUB_CALLBACK_URL = os.getenv("GITHUB_CALLBACK_URL", "").strip()
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
-GITHUB_ALLOWED_USERS = os.getenv("GITHUB_ALLOWED_USERS", "").strip()
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "100"))
 CHUNK_CHAR_LIMIT = max(1500, int(os.getenv("CHUNK_CHAR_LIMIT", "6500")))
 CORS_ORIGINS = [

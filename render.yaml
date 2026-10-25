@@ -21,8 +21,6 @@ services:
         sync: false
       - key: APP_SESSION_SECRET
         generateValue: true
-      - key: GITHUB_ALLOWED_USERS
-        value: luilencina
       - key: FRONTEND_URL
         value: https://luilencina.github.io/libris
       - key: GITHUB_CALLBACK_URL

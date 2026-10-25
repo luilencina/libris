@@ -14,13 +14,13 @@ export function GitHubLogin({ error }: GitHubLoginProps) {
         <span className="step-label">ACCOUNT</span>
         <h2>Sign in to continue</h2>
         <p className="hero-copy">
-          Translation access is limited to authorized GitHub accounts.
+          Sign in with your GitHub account to use Libris.
         </p>
         {error && (
           <div className="error-banner" role="alert">
-            {error === "not_allowed"
-              ? "This GitHub account is not authorized."
-              : "GitHub sign-in was cancelled. Try again to continue."}
+            {error === "cancelled"
+              ? "GitHub sign-in was cancelled. Try again to continue."
+              : "GitHub sign-in could not be completed. Try again."}
           </div>
         )}
         <a className="primary-button" href={`${API_BASE_URL}/auth/github`}>
