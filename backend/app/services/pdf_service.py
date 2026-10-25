@@ -1,20 +1,12 @@
+from __future__ import annotations
+
 import re
 import shutil
 from pathlib import Path
-from xml.sax.saxutils import escape
+from typing import TYPE_CHECKING, Iterable, Iterator
 
-import fitz
-from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.platypus import (
-    KeepTogether,
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-)
+if TYPE_CHECKING:
+    import fitz
 
 
 def _span_is_bold(span: dict) -> bool:
@@ -111,21 +103,27 @@ def _extract_page_paragraphs(page: fitz.Page) -> list[dict]:
     return paragraphs
 
 
-def extract_pdf_pages(pdf_path: Path) -> list[dict]:
-    pages: list[dict] = []
+def iter_pdf_pages(pdf_path: Path) -> Iterator[dict]:
+    import fitz
+
+    has_text = False
     with fitz.open(pdf_path) as document:
         if document.is_encrypted:
             raise ValueError("This PDF is password-protected and cannot be processed.")
         for page in document:
             paragraphs = _extract_page_paragraphs(page)
             if paragraphs:
-                pages.append({"paragraphs": paragraphs})
+                has_text = True
+                yield {"paragraphs": paragraphs}
 
-    if not pages:
+    if not has_text:
         raise ValueError(
             "No selectable text was found in this PDF. It may be scanned; OCR is required."
         )
-    return pages
+
+
+def extract_pdf_pages(pdf_path: Path) -> list[dict]:
+    return list(iter_pdf_pages(pdf_path))
 
 
 def extract_pdf_text(pdf_path: Path) -> list[str]:
@@ -135,38 +133,37 @@ def extract_pdf_text(pdf_path: Path) -> list[str]:
     ]
 
 
-def _split_long_paragraph(paragraph: str, limit: int) -> list[str]:
-    words = paragraph.split()
-    pieces: list[str] = []
+def _iter_long_paragraph(paragraph: str, limit: int) -> Iterator[str]:
     current = ""
 
-    for word in words:
+    for match in re.finditer(r"\S+", paragraph):
+        word = match.group()
         candidate = f"{current} {word}".strip()
         if len(candidate) <= limit:
             current = candidate
         else:
             if current:
-                pieces.append(current)
+                yield current
             while len(word) > limit:
-                pieces.append(word[:limit])
+                yield word[:limit]
                 word = word[limit:]
             current = word
 
     if current:
-        pieces.append(current)
-    return pieces
+        yield current
 
 
-def split_into_chunks(pages: list[str] | list[dict], limit: int) -> list[dict]:
-    chunks: list[dict] = []
+def iter_chunks(pages: Iterable[str | dict], limit: int) -> Iterator[dict]:
     current_parts: list[str] = []
     current_styles: list[dict] = []
     current_length = 0
     chunk_page_start = 1
     chunk_page_end = 1
+    chunk_index = 0
 
     for page_number, page in enumerate(pages, start=1):
         if isinstance(page, dict):
+            page_number = page.get("page_number", page_number)
             source_paragraphs = page.get("paragraphs", [])
         else:
             source_paragraphs = [
@@ -181,16 +178,17 @@ def split_into_chunks(pages: list[str] | list[dict], limit: int) -> list[dict]:
             ).strip()
             if not paragraph:
                 continue
-            for piece in _split_long_paragraph(paragraph, limit):
+            for piece in _iter_long_paragraph(paragraph, limit):
                 required = len(piece) + 2
                 if current_parts and current_length + required > limit:
-                    chunks.append({
-                        "index": len(chunks),
+                    yield {
+                        "index": chunk_index,
                         "page_start": chunk_page_start,
                         "page_end": chunk_page_end,
                         "text": "\n\n".join(current_parts),
                         "paragraph_styles": current_styles,
-                    })
+                    }
+                    chunk_index += 1
                     current_parts = []
                     current_styles = []
                     current_length = 0
@@ -211,74 +209,77 @@ def split_into_chunks(pages: list[str] | list[dict], limit: int) -> list[dict]:
                 chunk_page_end = page_number
 
     if current_parts:
-        chunks.append({
-            "index": len(chunks),
+        yield {
+            "index": chunk_index,
             "page_start": chunk_page_start,
             "page_end": chunk_page_end,
             "text": "\n\n".join(current_parts),
             "paragraph_styles": current_styles,
-        })
+        }
 
-    return chunks
+
+def split_into_chunks(pages: Iterable[str | dict], limit: int) -> list[dict]:
+    return list(iter_chunks(pages, limit))
 
 
 def create_translated_pdf(
-    translated_chunks: list[str],
+    translated_chunks: Iterable[str],
     output_path: Path,
     title: str,
-    paragraph_styles: list[list[dict]] | None = None,
+    paragraph_styles: Iterable[list[dict]] | None = None,
 ) -> None:
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "BookTitle",
-        parent=styles["Title"],
-        fontName="Helvetica-Bold",
-        fontSize=18,
-        leading=23,
-        alignment=TA_LEFT,
-        textColor=colors.HexColor("#34264f"),
-        spaceAfter=18,
-    )
-    body_style = ParagraphStyle(
-        "BookBody",
-        parent=styles["BodyText"],
-        fontName="Helvetica",
-        fontSize=10.5,
-        leading=15,
-        alignment=TA_LEFT,
-        spaceAfter=9,
-        splitLongWords=True,
-        allowWidows=0,
-        allowOrphans=0,
-    )
-    heading_style = ParagraphStyle(
-        "BookHeading",
-        parent=body_style,
-        fontName="Helvetica-Bold",
-        fontSize=13,
-        leading=17,
-        spaceBefore=10,
-        spaceAfter=7,
-        keepWithNext=True,
-    )
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib.utils import simpleSplit
+    from reportlab.pdfgen import canvas
 
-    def draw_page_number(canvas, document):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(colors.HexColor("#777777"))
-        canvas.drawCentredString(A4[0] / 2, 12 * mm, str(document.page))
-        canvas.restoreState()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    document = canvas.Canvas(str(output_path), pagesize=A4)
+    document.setTitle(title)
+    document.setAuthor("Libris")
+    page_width, page_height = A4
+    left_margin = right_margin = 22 * mm
+    top_margin = 22 * mm
+    bottom_margin = 20 * mm
+    footer_height = 12 * mm
+    text_width = page_width - left_margin - right_margin
+    cursor = page_height - top_margin
+    page_number = 1
 
-    story = [Paragraph(escape(title), title_style), Spacer(1, 4 * mm)]
+    def draw_footer() -> None:
+        document.saveState()
+        document.setFont("Helvetica", 8)
+        document.setFillColor(colors.HexColor("#777777"))
+        document.drawCentredString(page_width / 2, 12 * mm, str(page_number))
+        document.restoreState()
 
-    for chunk_index, chunk in enumerate(translated_chunks):
-        styles_for_chunk = (
-            paragraph_styles[chunk_index]
-            if paragraph_styles and chunk_index < len(paragraph_styles)
-            else []
-        )
-        paragraphs = re.split(r"\n\s*\n", chunk.strip())
-        for paragraph_index, paragraph in enumerate(paragraphs):
+    def new_page() -> None:
+        nonlocal cursor, page_number
+        draw_footer()
+        document.showPage()
+        page_number += 1
+        cursor = page_height - top_margin
+
+    def draw_wrapped(text: str, font: str, size: float, leading: float) -> None:
+        nonlocal cursor
+        for raw_line in text.splitlines() or [""]:
+            lines = simpleSplit(raw_line, font, size, text_width) or [""]
+            for line in lines:
+                if cursor - leading < bottom_margin + footer_height:
+                    new_page()
+                document.setFont(font, size)
+                document.drawString(left_margin, cursor - size, line)
+                cursor -= leading
+
+    document.setFillColor(colors.HexColor("#34264f"))
+    draw_wrapped(title, "Helvetica-Bold", 18, 23)
+    cursor -= 4 * mm
+    style_iterator = iter(paragraph_styles) if paragraph_styles is not None else iter(())
+
+    for chunk in translated_chunks:
+        styles_for_chunk = next(style_iterator, [])
+        for paragraph_index, paragraph in enumerate(re.split(r"\n\s*\n", chunk.strip())):
             paragraph = paragraph.strip()
             if not paragraph:
                 continue
@@ -289,29 +290,30 @@ def create_translated_pdf(
             )
             if paragraph_style.get("uppercase"):
                 paragraph = paragraph.upper()
-            safe_text = escape(paragraph).replace("\n", "<br/>")
-            if paragraph_style.get("bold"):
-                safe_text = f"<b>{safe_text}</b>"
-            if paragraph_style.get("italic"):
-                safe_text = f"<i>{safe_text}</i>"
-
+            document.setFillColor(colors.black)
             if paragraph_style.get("heading"):
-                story.append(KeepTogether([Paragraph(safe_text, heading_style), Spacer(1, 2 * mm)]))
+                cursor -= 10
+                font = "Helvetica-Bold"
+                size = 13
+                leading = 17
             else:
-                story.append(Paragraph(safe_text, body_style))
-        story.append(Spacer(1, 4 * mm))
+                font = (
+                    "Helvetica-BoldOblique"
+                    if paragraph_style.get("bold") and paragraph_style.get("italic")
+                    else "Helvetica-Bold"
+                    if paragraph_style.get("bold")
+                    else "Helvetica-Oblique"
+                    if paragraph_style.get("italic")
+                    else "Helvetica"
+                )
+                size = 10.5
+                leading = 15
+            draw_wrapped(paragraph, font, size, leading)
+            cursor -= 7 if paragraph_style.get("heading") else 9
+        cursor -= 4 * mm
 
-    document = SimpleDocTemplate(
-        str(output_path),
-        pagesize=A4,
-        rightMargin=22 * mm,
-        leftMargin=22 * mm,
-        topMargin=22 * mm,
-        bottomMargin=20 * mm,
-        title=title,
-        author="Libris",
-    )
-    document.build(story, onFirstPage=draw_page_number, onLaterPages=draw_page_number)
+    draw_footer()
+    document.save()
 
 
 def remove_job_directory(job_dir: Path) -> None:

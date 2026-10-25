@@ -58,11 +58,13 @@ Copy-Item .env.example .env
 
 Edite `backend/.env` e defina `GEMINI_API_KEY` se for usar Gemini. A chave deve permanecer no backend e não pode ser enviada ao GitHub.
 
-Para instalar o pacote Argos de inglês para português (opcional):
+Para instalar sequencialmente os pacotes Argos prioritários:
 
 ```powershell
 python install_argos_language.py
 ```
+
+O instalador consulta o índice oficial, ignora pares já instalados e tenta cada pacote individualmente. O conjunto usa `en ↔ pt`, `pt ↔ es`, e pares em ambas as direções entre inglês e alemão, francês e italiano. Assim, o Argos compõe traduções entre todos os seis idiomas sem baixar todos os pares do catálogo. O índice oferece `pt` (Portuguese), não um pacote separado `pt-BR`.
 
 Inicie a API:
 
@@ -93,11 +95,25 @@ O repositório é `https://github.com/luilencina/libris`. Frontend e backend per
 1. Crie ou sincronize o Blueprint do Render com este repositório e o arquivo `render.yaml`. O serviço está configurado com o nome `libris-api`.
 2. Depois de renomear o serviço no Render, confirme o domínio atribuído. A configuração assume `https://libris-api.onrender.com`; se o Render mostrar outro domínio, atualize `GITHUB_CALLBACK_URL` para `https://<domínio-real>/api/auth/github/callback` e use esse mesmo domínio nos próximos passos.
 3. Crie uma GitHub OAuth App em **Settings → Developer settings → OAuth Apps**. Configure a Homepage URL como `https://luilencina.github.io/libris/` e o Authorization callback URL com o callback do Render confirmado no passo anterior.
-4. No build, o Render instala automaticamente o pacote Argos de inglês para português (`en → pt`), que é o par padrão da aplicação. Outros pares podem ser instalados pela opção de idiomas na interface depois do deploy.
+4. No build, o Render instala os dez pares direcionais definidos em `backend/install_argos_language.py`, um por vez, em `backend/argos-packages`. Falhas individuais aparecem nos logs do build e não impedem a API de iniciar; pares ausentes ficam indisponíveis até serem instalados. A instalação não ocorre durante a inicialização da API.
 5. Configure `GEMINI_API_KEY`, `GITHUB_CLIENT_ID` e `GITHUB_CLIENT_SECRET` nas variáveis de ambiente do Render. `APP_SESSION_SECRET` é gerado pelo Blueprint. Não coloque nenhum desses segredos no frontend nem em arquivos versionados.
 6. Qualquer conta GitHub pode entrar. O endpoint público de saúde é `/api/health`; a documentação da API é `/docs`.
 
 O CORS permite a origem `https://luilencina.github.io`. CORS não substitui autenticação: as rotas de livros e traduções continuam protegidas pelo login.
+
+#### Memória e diagnóstico do Argos
+
+- O processo usa CPU, INT8 e uma thread CTranslate2. Uma tradução composta é executada em etapas: cada modelo é liberado antes de carregar o próximo. A extração de livros, os jobs de tradução e a instalação de pacotes são serializados para evitar picos simultâneos; modelos não são carregados todos no startup.
+- A extração de PDF/EPUB e a criação dos arquivos de chunks são feitas incrementalmente. Textos e estilos traduzidos são lidos do disco durante a exportação, em vez de acumular o livro inteiro na RAM.
+- O catálogo oficial consultado contém os dez pares escolhidos. Uma medição local real de `en → pt` com INT8 e uma thread atingiu **465,2 MiB de RSS** neste Windows; após liberar o tradutor, o RSS observado foi **382,4 MiB**. Isso não equivale a uma medição no Render e deixa pouca margem em uma instância de 512 MB. Não é possível garantir que todos os modelos e livros caibam no plano Free sem medir a instância real; se o diagnóstico ou os logs se aproximarem de 512 MB, use pelo menos o plano Render de 2 GB ou reduza a carga.
+- O conjunto mínimo inclui dez arquivos de modelo; o tamanho comprimido estimado a partir do catálogo é aproximadamente **0,82 GiB**. O tamanho instalado e o espaço livre exatos são impressos nos logs do build. Confirme que o deploy completa e que há espaço suficiente no filesystem do serviço.
+- Depois do login, use `GET /api/languages/diagnostics` para consultar pares instalados e utilizáveis. Para executar uma tradução curta real e conferir RSS atual/pico no Render, use `GET /api/languages/diagnostics?test=true` com o token da sessão:
+
+```powershell
+curl.exe -H "Authorization: Bearer <TOKEN_DA_SESSAO>" "https://libris-api.onrender.com/api/languages/diagnostics?test=true"
+```
+
+O resultado contém `installed_direct_pairs`, `usable_pairs`, `test_translation` e `process_memory`. A rota exige login. Os logs do build mostram cada instalação, falhas por par, uso do diretório dos modelos e espaço restante.
 
 ### Interface no GitHub Pages
 
@@ -112,7 +128,8 @@ O workflow instala as dependências, compila `frontend` e publica `frontend/dist
 - O plano gratuito do Render é indicado para testes e projetos pessoais, não para produção. Ele pode suspender após inatividade e demorar para responder na primeira solicitação.
 - O sistema de arquivos gratuito é efêmero. Livros enviados, traduções, checkpoints, histórico e pacotes Argos podem desaparecer ao suspender, reiniciar ou publicar uma nova versão.
 - Para persistência, configure um disco persistente compatível no backend e defina `DATA_DIR` para o ponto de montagem.
-- A memória disponível no plano gratuito pode ser insuficiente para alguns pacotes Argos. MOBI também requer Calibre, que não está incluído na configuração padrão.
+- O plano Free oferece 512 MB de RAM. A medição local de `en → pt` já chegou a 465,2 MiB; a memória no Render depende da imagem/runtime e dos modelos usados. Não considere o plano de 512 MB validado até executar o diagnóstico e testar a tradução de maior consumo na instância publicada. O filesystem é efêmero: os modelos instalados no build fazem parte da versão implantada, mas instalações feitas durante a execução podem desaparecer ao reiniciar ou suspender.
+- MOBI também requer Calibre, que não está incluído na configuração padrão.
 - Qualquer conta GitHub pode usar o serviço. O login confirma a identidade, mas não limita quem pode consumir a cota Gemini, a memória e o armazenamento. Para um serviço público, configure rate limiting, cotas por conta e monitoramento de custos.
 
 ## Privacidade e uso responsável

@@ -1,3 +1,4 @@
+import codecs
 import html
 import posixpath
 import shutil
@@ -5,10 +6,11 @@ import subprocess
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
+from typing import Iterable, Iterator
 from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
-from app.services.pdf_service import extract_pdf_pages
+from app.services.pdf_service import iter_pdf_pages
 
 SUPPORTED_FORMATS = {"pdf", "epub", "mobi"}
 MIME_TYPES = {
@@ -140,7 +142,7 @@ def _resolve_epub_path(base: PurePosixPath, href: str) -> str:
     return resolved
 
 
-def extract_epub_pages(epub_path: Path) -> list[dict]:
+def iter_epub_pages(epub_path: Path) -> Iterator[dict]:
     try:
         with zipfile.ZipFile(epub_path) as archive:
             container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
@@ -161,83 +163,76 @@ def extract_epub_pages(epub_path: Path) -> list[dict]:
                 if item.get("idref") in manifest
             ]
             base = package_path.parent
-            pages = []
+            has_text = False
+            text_page_number = 0
             for item_id in spine:
                 content_path = _resolve_epub_path(base, manifest[item_id])
                 parser = _EpubTextParser()
-                parser.feed(archive.read(content_path).decode("utf-8", errors="replace"))
+                decoder = codecs.getincrementaldecoder("utf-8")()
+                page_number = None
+                with archive.open(content_path) as chapter:
+                    while block := chapter.read(64 * 1024):
+                        parser.feed(decoder.decode(block))
+                        if parser.paragraphs:
+                            has_text = True
+                            if page_number is None:
+                                text_page_number += 1
+                                page_number = text_page_number
+                            paragraphs = parser.paragraphs
+                            parser.paragraphs = []
+                            yield {
+                                "page_number": page_number,
+                                "paragraphs": paragraphs,
+                            }
+                    parser.feed(decoder.decode(b"", final=True))
                 parser.close()
                 parser._flush()
                 if parser.paragraphs:
-                    pages.append({"paragraphs": parser.paragraphs})
+                    has_text = True
+                    if page_number is None:
+                        text_page_number += 1
+                        page_number = text_page_number
+                    yield {
+                        "page_number": page_number,
+                        "paragraphs": parser.paragraphs,
+                    }
     except (zipfile.BadZipFile, KeyError, ElementTree.ParseError) as error:
         raise ValueError("The EPUB file is invalid or could not be read.") from error
 
-    if not pages:
+    if not has_text:
         raise ValueError("No readable book text was found in this EPUB.")
-    return pages
 
 
-def extract_book_pages(source_path: Path, input_format: str, job_dir: Path) -> list[dict]:
+def extract_epub_pages(epub_path: Path) -> list[dict]:
+    return list(iter_epub_pages(epub_path))
+
+
+def extract_book_pages(
+    source_path: Path,
+    input_format: str,
+    job_dir: Path,
+) -> Iterator[dict]:
     if input_format == "pdf":
-        return extract_pdf_pages(source_path)
+        yield from iter_pdf_pages(source_path)
+        return
     if input_format == "epub":
-        return extract_epub_pages(source_path)
+        yield from iter_epub_pages(source_path)
+        return
     if input_format == "mobi":
         converted_epub = job_dir / "source-converted.epub"
         _convert_with_calibre(source_path, converted_epub)
-        return extract_epub_pages(converted_epub)
+        yield from iter_epub_pages(converted_epub)
+        return
     raise ValueError(f"Unsupported input format: {input_format}")
 
 
-def _translated_paragraphs(
-    translated_chunks: list[str],
-    paragraph_styles: list[list[dict]] | None,
-) -> list[tuple[str, dict]]:
-    paragraphs: list[tuple[str, dict]] = []
-    for chunk_index, chunk in enumerate(translated_chunks):
-        styles = (
-            paragraph_styles[chunk_index]
-            if paragraph_styles and chunk_index < len(paragraph_styles)
-            else []
-        )
-        for paragraph_index, text in enumerate(chunk.split("\n\n")):
-            text = text.strip()
-            if text:
-                style = styles[paragraph_index] if paragraph_index < len(styles) else {}
-                paragraphs.append((text, style))
-    return paragraphs
-
-
 def create_translated_epub(
-    translated_chunks: list[str],
+    translated_chunks: Iterable[str],
     output_path: Path,
     title: str,
-    paragraph_styles: list[list[dict]] | None = None,
+    paragraph_styles: Iterable[list[dict]] | None = None,
 ) -> None:
-    rendered_paragraphs = []
-    for text, style in _translated_paragraphs(translated_chunks, paragraph_styles):
-        tag = "h2" if style.get("heading") else "p"
-        content = html.escape(text).replace("\n", "<br/>")
-        if style.get("uppercase"):
-            content = content.upper()
-        if style.get("bold"):
-            content = f"<strong>{content}</strong>"
-        if style.get("italic"):
-            content = f"<em>{content}</em>"
-        rendered_paragraphs.append(f"<{tag}>{content}</{tag}>")
-
     safe_title = html.escape(title)
-    chapter = (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
-        "<head><title>"
-        + safe_title
-        + "</title><style>body{font-family:serif;line-height:1.55;margin:5%}"
-        "h1{text-align:center;margin:0 0 2em}h2{font-size:1.25em;margin-top:1.5em}"
-        "p{margin:.7em 0;text-indent:1.2em}</style></head><body>"
-        f"<h1>{safe_title}</h1>{''.join(rendered_paragraphs)}</body></html>"
-    )
     package = (
         '<?xml version="1.0" encoding="utf-8"?>'
         '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
@@ -272,7 +267,41 @@ def create_translated_epub(
             'media-type="application/oebps-package+xml"/></rootfiles></container>',
         )
         archive.writestr("OEBPS/content.opf", package)
-        archive.writestr("OEBPS/chapter.xhtml", chapter)
+        with archive.open("OEBPS/chapter.xhtml", "w") as chapter:
+            chapter.write(
+                (
+                    '<?xml version="1.0" encoding="utf-8"?>'
+                    '<html xmlns="http://www.w3.org/1999/xhtml" '
+                    'xmlns:epub="http://www.idpf.org/2007/ops"><head><title>'
+                    f"{safe_title}</title><style>body{{font-family:serif;line-height:1.55;margin:5%}}"
+                    "h1{text-align:center;margin:0 0 2em}"
+                    "h2{font-size:1.25em;margin-top:1.5em}"
+                    "p{margin:.7em 0;text-indent:1.2em}</style></head><body>"
+                    f"<h1>{safe_title}</h1>"
+                ).encode("utf-8")
+            )
+            style_iterator = iter(paragraph_styles) if paragraph_styles is not None else iter(())
+            for text in translated_chunks:
+                styles_for_chunk = next(style_iterator, [])
+                for paragraph_index, paragraph in enumerate(text.split("\n\n")):
+                    paragraph = paragraph.strip()
+                    if not paragraph:
+                        continue
+                    style = (
+                        styles_for_chunk[paragraph_index]
+                        if paragraph_index < len(styles_for_chunk)
+                        else {}
+                    )
+                    tag = "h2" if style.get("heading") else "p"
+                    content = html.escape(paragraph).replace("\n", "<br/>")
+                    if style.get("uppercase"):
+                        content = content.upper()
+                    if style.get("bold"):
+                        content = f"<strong>{content}</strong>"
+                    if style.get("italic"):
+                        content = f"<em>{content}</em>"
+                    chapter.write(f"<{tag}>{content}</{tag}>".encode("utf-8"))
+            chapter.write(b"</body></html>")
         archive.writestr("OEBPS/nav.xhtml", navigation)
 
 

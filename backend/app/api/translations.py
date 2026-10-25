@@ -10,13 +10,14 @@ from app.core.config import JOBS_DIR, MAX_UPLOAD_MB
 from app.core.auth import require_authenticated_user
 from app.services.book_formats import MIME_TYPES, SUPPORTED_FORMATS, find_calibre_converter
 from app.services.translation_service import (
-    create_job,
+    create_job_safely,
     delete_job,
+    get_argos_diagnostics,
     get_argos_languages,
     get_argos_pairs,
-    get_available_argos_packages,
+    get_available_argos_packages_safely,
     get_job_dir,
-    install_argos_package,
+    install_argos_package_safely,
     load_job,
     register_job,
     read_json,
@@ -54,10 +55,21 @@ async def languages():
     return {"languages": get_argos_languages(), "pairs": get_argos_pairs()}
 
 
+@router.get("/languages/diagnostics")
+async def argos_diagnostics(test: bool = False):
+    try:
+        return await get_argos_diagnostics(run_test=test)
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not inspect Argos Translate: {error}",
+        ) from error
+
+
 @router.get("/languages/available")
 async def available_languages():
     try:
-        packages = await asyncio.to_thread(get_available_argos_packages)
+        packages = await get_available_argos_packages_safely()
     except Exception as error:
         raise HTTPException(
             status_code=502,
@@ -69,8 +81,7 @@ async def available_languages():
 @router.post("/languages/install")
 async def install_language_package(request: ArgosPackageRequest):
     try:
-        await asyncio.to_thread(
-            install_argos_package,
+        await install_argos_package_safely(
             request.source_code,
             request.target_code,
         )
@@ -154,8 +165,7 @@ async def start_translation(
             await file.close()
 
     try:
-        job = await asyncio.to_thread(
-            create_job,
+        job = await create_job_safely(
             temporary_path,
             filename,
             engine,

@@ -5,7 +5,7 @@ services:
     plan: free
     region: oregon
     rootDir: backend
-    buildCommand: pip install -r requirements.txt && python install_argos_language.py pt
+    buildCommand: pip install -r requirements.txt && python install_argos_language.py
     startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
@@ -27,3 +27,13 @@ services:
         value: https://libris-api.onrender.com/api/auth/github/callback
       - key: CORS_ORIGINS
         value: https://luilencina.github.io
+      - key: ARGOS_PACKAGES_DIR
+        value: /opt/render/project/src/backend/argos-packages
+      - key: ARGOS_DEVICE_TYPE
+        value: cpu
+      - key: ARGOS_COMPUTE_TYPE
+        value: int8
+      - key: ARGOS_INTER_THREADS
+        value: "1"
+      - key: ARGOS_INTRA_THREADS
+        value: "1"

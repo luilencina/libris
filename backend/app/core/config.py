@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(BACKEND_DIR / ".env")
 
+os.environ.setdefault("ARGOS_DEVICE_TYPE", "cpu")
+os.environ.setdefault("ARGOS_COMPUTE_TYPE", "int8")
+os.environ.setdefault("ARGOS_INTER_THREADS", "1")
+os.environ.setdefault("ARGOS_INTRA_THREADS", "1")
+
 DATA_DIR = Path(os.getenv("DATA_DIR", str(BACKEND_DIR / "data"))).resolve()
 JOBS_DIR = DATA_DIR / "jobs"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
