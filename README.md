@@ -93,9 +93,10 @@ O repositório é `https://github.com/luilencina/libris`. Frontend e backend per
 1. Crie ou sincronize o Blueprint do Render com este repositório e o arquivo `render.yaml`. O serviço está configurado com o nome `libris-api`.
 2. Depois de renomear o serviço no Render, confirme o domínio atribuído. A configuração assume `https://libris-api.onrender.com`; se o Render mostrar outro domínio, atualize `GITHUB_CALLBACK_URL` para `https://<domínio-real>/api/auth/github/callback` e use esse mesmo domínio nos próximos passos.
 3. Crie uma GitHub OAuth App em **Settings → Developer settings → OAuth Apps**. Configure a Homepage URL como `https://luilencina.github.io/libris/` e o Authorization callback URL com o callback do Render confirmado no passo anterior.
-4. Configure `GEMINI_API_KEY`, `GITHUB_CLIENT_ID` e `GITHUB_CLIENT_SECRET` nas variáveis de ambiente do Render. `APP_SESSION_SECRET` é gerado pelo Blueprint. Não coloque nenhum desses segredos no frontend nem em arquivos versionados.
-5. O Blueprint permite inicialmente o usuário GitHub `luilencina`. Altere `GITHUB_ALLOWED_USERS` no Render para permitir outras contas.
-6. O endpoint público de saúde é `/api/health`; a documentação da API é `/docs`.
+4. No build, o Render instala automaticamente o pacote Argos de inglês para português (`en → pt`), que é o par padrão da aplicação. Outros pares podem ser instalados pela opção de idiomas na interface depois do deploy.
+5. Configure `GEMINI_API_KEY`, `GITHUB_CLIENT_ID` e `GITHUB_CLIENT_SECRET` nas variáveis de ambiente do Render. `APP_SESSION_SECRET` é gerado pelo Blueprint. Não coloque nenhum desses segredos no frontend nem em arquivos versionados.
+6. O Blueprint permite inicialmente o usuário GitHub `luilencina`. Altere `GITHUB_ALLOWED_USERS` no Render para permitir outras contas.
+7. O endpoint público de saúde é `/api/health`; a documentação da API é `/docs`.
 
 O CORS permite a origem `https://luilencina.github.io`. CORS não substitui autenticação: as rotas de livros e traduções continuam protegidas pelo login.
 
