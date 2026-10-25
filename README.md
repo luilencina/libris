@@ -92,9 +92,9 @@ O repositório é `https://github.com/luilencina/libris`. Frontend e backend per
 
 ### API no Render
 
-1. Crie ou sincronize o Blueprint do Render com este repositório e o arquivo `render.yaml`. O serviço está configurado com o nome `libris-api`.
-2. Depois de renomear o serviço no Render, confirme o domínio atribuído. A configuração assume `https://libris-api.onrender.com`; se o Render mostrar outro domínio, atualize `GITHUB_CALLBACK_URL` para `https://<domínio-real>/api/auth/github/callback` e use esse mesmo domínio nos próximos passos.
-3. Crie uma GitHub OAuth App em **Settings → Developer settings → OAuth Apps**. Configure a Homepage URL como `https://luilencina.github.io/libris/` e o Authorization callback URL com o callback do Render confirmado no passo anterior.
+1. Crie ou sincronize o Blueprint do Render com este repositório e o arquivo `render.yaml`. O backend ativo usa `https://novel-translator-api.onrender.com`.
+2. Confirme que a variável `GITHUB_CALLBACK_URL` no Render está definida exatamente como `https://novel-translator-api.onrender.com/api/auth/github/callback`.
+3. Crie ou atualize a GitHub OAuth App em **Settings → Developer settings → OAuth Apps**. Configure a Homepage URL como `https://luilencina.github.io/libris/` e o Authorization callback URL exatamente como `https://novel-translator-api.onrender.com/api/auth/github/callback`.
 4. No build, o Render instala os dez pares direcionais definidos em `backend/install_argos_language.py`, um por vez, em `backend/argos-packages`. Falhas individuais aparecem nos logs do build e não impedem a API de iniciar; pares ausentes ficam indisponíveis até serem instalados. A instalação não ocorre durante a inicialização da API.
 5. Configure `GEMINI_API_KEY`, `GITHUB_CLIENT_ID` e `GITHUB_CLIENT_SECRET` nas variáveis de ambiente do Render. `APP_SESSION_SECRET` é gerado pelo Blueprint. Não coloque nenhum desses segredos no frontend nem em arquivos versionados.
 6. Qualquer conta GitHub pode entrar. O endpoint público de saúde é `/api/health`; a documentação da API é `/docs`.
@@ -110,7 +110,7 @@ O CORS permite a origem `https://luilencina.github.io`. CORS não substitui aute
 - Depois do login, use `GET /api/languages/diagnostics` para consultar pares instalados e utilizáveis. Para executar uma tradução curta real e conferir RSS atual/pico no Render, use `GET /api/languages/diagnostics?test=true` com o token da sessão:
 
 ```powershell
-curl.exe -H "Authorization: Bearer <TOKEN_DA_SESSAO>" "https://libris-api.onrender.com/api/languages/diagnostics?test=true"
+curl.exe -H "Authorization: Bearer <TOKEN_DA_SESSAO>" "https://novel-translator-api.onrender.com/api/languages/diagnostics?test=true"
 ```
 
 O resultado contém `installed_direct_pairs`, `usable_pairs`, `test_translation` e `process_memory`. A rota exige login. Os logs do build mostram cada instalação, falhas por par, uso do diretório dos modelos e espaço restante.
@@ -118,7 +118,7 @@ O resultado contém `installed_direct_pairs`, `usable_pairs`, `test_translation`
 ### Interface no GitHub Pages
 
 1. Em **Settings → Pages**, selecione **GitHub Actions** como fonte de publicação.
-2. O workflow publica automaticamente a cada envio para `main` ou pode ser executado manualmente pela aba **Actions**. Por padrão, ele usa `https://libris-api.onrender.com` como API.
+2. O workflow publica automaticamente a cada envio para `main` ou pode ser executado manualmente pela aba **Actions**. Por padrão, ele usa `https://novel-translator-api.onrender.com` como API.
 3. Se o Render atribuir outro domínio ao serviço, configure a variável de Actions `VITE_API_URL` com a origem HTTPS real do backend, sem `/api` ao final. Essa URL não é um segredo.
 
 O workflow instala as dependências, compila `frontend` e publica `frontend/dist`. O endereço esperado é `https://luilencina.github.io/libris/`.

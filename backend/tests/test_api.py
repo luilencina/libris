@@ -25,7 +25,7 @@ class ApiTests(unittest.TestCase):
             APP_SESSION_SECRET="test-session-secret-with-more-than-32-characters",
             GITHUB_CLIENT_ID="client-id",
             GITHUB_CLIENT_SECRET="client-secret",
-            GITHUB_CALLBACK_URL="https://api.example.com/api/auth/github/callback",
+            GITHUB_CALLBACK_URL="https://novel-translator-api.onrender.com/api/auth/github/callback",
             FRONTEND_URL="https://example.github.io/app",
         ):
             response = self.client.get(
@@ -34,9 +34,9 @@ class ApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
-        self.assertIn(
-            "api.example.com/api/auth/github/callback",
+        self.assertEqual(
             parse_qs(urlparse(response.headers["location"]).query)["redirect_uri"][0],
+            "https://novel-translator-api.onrender.com/api/auth/github/callback",
         )
         cookie = response.headers["set-cookie"].casefold()
         self.assertIn("httponly", cookie)

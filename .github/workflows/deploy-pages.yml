@@ -19,7 +19,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      VITE_API_URL: ${{ vars.VITE_API_URL || 'https://libris-api.onrender.com' }}
+      VITE_API_URL: ${{ vars.VITE_API_URL || 'https://novel-translator-api.onrender.com' }}
       VITE_AUTH_MODE: github
     environment:
       name: github-pages

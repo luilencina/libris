@@ -24,7 +24,7 @@ services:
       - key: FRONTEND_URL
         value: https://luilencina.github.io/libris
       - key: GITHUB_CALLBACK_URL
-        value: https://libris-api.onrender.com/api/auth/github/callback
+        value: https://novel-translator-api.onrender.com/api/auth/github/callback
       - key: CORS_ORIGINS
         value: https://luilencina.github.io
       - key: ARGOS_PACKAGES_DIR
